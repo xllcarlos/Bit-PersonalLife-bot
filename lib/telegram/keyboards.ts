@@ -2,14 +2,20 @@ import { InlineKeyboard } from "grammy";
 
 export function createProposalKeyboard(
   id: string,
-  kind: "create" | "update" | "delete"
+  kind: "create" | "task" | "update" | "delete"
 ): InlineKeyboard {
   const kb = new InlineKeyboard();
   if (kind === "delete") {
     return kb.text("🗑️ Sim, excluir", `a:ok:${id}`).text("❌ Cancelar", `a:no:${id}`);
   }
+  const label =
+    kind === "create"
+      ? "✅ Confirmar no Google"
+      : kind === "task"
+        ? "✅ Criar no Notion"
+        : "✅ Aplicar";
   return kb
-    .text(kind === "create" ? "✅ Confirmar" : "✅ Aplicar", `a:ok:${id}`)
+    .text(label, `a:ok:${id}`)
     .row()
     .text("🔄 Outro horário", `a:redo:${id}`)
     .text("❌ Cancelar", `a:no:${id}`);

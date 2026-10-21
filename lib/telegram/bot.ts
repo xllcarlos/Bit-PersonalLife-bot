@@ -5,9 +5,15 @@ import {
   CalendarEvent,
   createEvent,
   deleteEvent,
-  listEvents,
   updateEvent,
 } from "../google/calendar";
+import {
+  archiveTask,
+  createTask,
+  isNotionConfigured,
+  updateTask,
+} from "../notion/tasks";
+import { loadAgenda } from "../agenda";
 import { escapeHtml as e, modelTextToHtml, stripTags, chunkText } from "../html";
 import {
   addDaysIso,
@@ -30,8 +36,6 @@ import {
 import type { PendingAction } from "../types";
 import { createProposalKeyboard } from "./keyboards";
 
-// Os envios ao Telegram são feitos via API (não na resposta HTTP do webhook), para que
-// terminem antes de a função serverless ser encerrada.
 export const bot = new Bot(config.telegram.botToken || "dummy_token_for_build", {
   client: { canUseWebhookReply: () => false },
 });
@@ -56,7 +60,6 @@ bot.use(async (ctx, next) => {
   }
 });
 
-// Telegram reenvia updates quando demora a responder; processar duas vezes duplicaria eventos.
 bot.use(async (ctx, next) => {
   if (await markUpdateSeen(ctx.update.update_id)) await next();
 });
@@ -98,6 +101,15 @@ function transcriptionHtml(text?: string | null): string {
   return text ? `🎙️ <i>"${e(text)}"</i>\n\n` : "";
 }
 
+function formatDeadline(start: string, end?: string | null): string {
+  if (!start.includes("T")) {
+    return end && end !== start
+      ? `${formatDayBr(start)} a ${formatDayBr(end)}`
+      : formatDayBr(start);
+  }
+  return end ? formatRangeBr(start, end) : formatDateBr(start);
+}
+
 function describeEventTime(ev: CalendarEvent): string {
   return ev.allDay
     ? ev.start === ev.end
@@ -117,14 +129,19 @@ bot.command("start", async (ctx) => {
       "⚠️ Redis não configurado: os botões de confirmação podem falhar na Vercel (veja o README)."
     );
   }
+  const notionStatus = isNotionConfigured()
+    ? `🟢 Notion conectado (colunas: <code>${e(config.notion.titleProperty)}</code> e <code>${e(config.notion.dateProperty)}</code>)`
+    : `⚪ Notion ainda não configurado (defina <code>NOTION_API_KEY</code> e <code>NOTION_TASK_DATABASE_ID</code>)`;
 
   await replyHtml(
     ctx,
     `👋 Olá, Carlos! Sou o seu <b>secretário de agenda</b>.\n\n` +
+      `${notionStatus}\n\n` +
       `Pode falar ou escrever. Por exemplo:\n` +
       `• "Como está a minha agenda hoje?"\n` +
       `• "O que eu tenho amanhã?"\n` +
       `• "Preciso ler o artigo do MICCAI na quinta à tarde, 1h30"\n` +
+      `• "Adiciona tarefa: Texto Professor para até sexta"\n` +
       `• "Muda a reunião de sexta para as 15h"\n` +
       `• "Desmarca a reunião de amanhã"\n\n` +
       `Comandos: /agenda (hoje e próximos dias)` +
@@ -164,13 +181,12 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
 
     const audioBase64 = input.voiceFileId ? await downloadAudio(ctx, input.voiceFileId) : undefined;
 
-    // A janela começa à 00:00 de hoje (fuso de SP): eventos que já passaram hoje continuam na agenda.
     const now = new Date();
     const timeMin = startOfDayIso(now);
     const timeMax = addDaysIso(timeMin, config.scheduler.lookaheadDays);
 
-    const [events, pendingContext] = await Promise.all([
-      listEvents(timeMin, timeMax),
+    const [{ events, warnings: agendaWarnings }, pendingContext] = await Promise.all([
+      loadAgenda(timeMin, timeMax),
       getContext(chatId),
     ]);
 
@@ -181,21 +197,25 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
       now,
       events,
       pendingContext,
+      notionEnabled: isNotionConfigured(),
     });
 
     const heard = transcriptionHtml(result.transcribedText);
+    const warnBanner = agendaWarnings.length
+      ? `⚠️ <i>${agendaWarnings.map(e).join(" ")}</i>\n\n`
+      : "";
 
     switch (result.intent) {
       case "query":
       case "chat":
-        await replyHtml(ctx, heard + modelTextToHtml(result.message));
+        await replyHtml(ctx, heard + warnBanner + modelTextToHtml(result.message));
         return;
 
       case "schedule": {
         const conflicts = events.filter(
-          (ev) => !ev.allDay && overlaps(result.start, result.end, ev.start, ev.end)
+          (ev) => !ev.allDay && !ev.done && overlaps(result.start, result.end, ev.start, ev.end)
         );
-        const warnings: string[] = [];
+        const warnings: string[] = [...agendaWarnings.map((w) => `⚠️ ${e(w)}`)];
         if (Date.parse(result.start) < Date.now()) warnings.push("⚠️ Esse horário já passou.");
         for (const c of conflicts) {
           warnings.push(`⚠️ Conflita com <b>${e(c.title)}</b> (${e(formatRangeBr(c.start, c.end))})`);
@@ -211,12 +231,12 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
         const id = await savePending(action);
         await saveContext(
           chatId,
-          `Criar "${result.title}" em ${formatRangeBr(result.start, result.end)} (aguardando confirmação)`
+          `Criar compromisso no Google "${result.title}" em ${formatRangeBr(result.start, result.end)} (aguardando confirmação)`
         );
 
         await replyHtml(
           ctx,
-          `${heard}📅 <b>Proposta de agendamento</b>\n\n` +
+          `${heard}📅 <b>Proposta de compromisso (Google Calendar)</b>\n\n` +
             `📌 <b>${e(result.title)}</b>\n` +
             `⏰ ${e(formatRangeBr(result.start, result.end))}\n` +
             (warnings.length ? `\n${warnings.join("\n")}\n` : "") +
@@ -227,11 +247,54 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
         return;
       }
 
+      case "task": {
+        if (!isNotionConfigured()) {
+          await replyHtml(
+            ctx,
+            `${heard}⚠️ O Notion ainda não está configurado. Defina <code>NOTION_API_KEY</code> e <code>NOTION_TASK_DATABASE_ID</code> na Vercel.`
+          );
+          return;
+        }
+
+        const warnings: string[] = [...agendaWarnings.map((w) => `⚠️ ${e(w)}`)];
+        if (result.start.includes("T") && result.end) {
+          const conflicts = events.filter(
+            (ev) => !ev.allDay && !ev.done && overlaps(result.start, result.end!, ev.start, ev.end)
+          );
+          for (const c of conflicts) {
+            warnings.push(`⚠️ Conflita com <b>${e(c.title)}</b> (${e(formatRangeBr(c.start, c.end))})`);
+          }
+        }
+
+        const action: PendingAction = {
+          kind: "task",
+          title: result.title,
+          start: result.start,
+          end: result.end ?? undefined,
+        };
+        const id = await savePending(action);
+        const deadlineStr = formatDeadline(result.start, result.end);
+        await saveContext(
+          chatId,
+          `Criar tarefa no Notion "${result.title}" com prazo ${deadlineStr} (aguardando confirmação)`
+        );
+
+        await replyHtml(
+          ctx,
+          `${heard}📝 <b>Proposta de tarefa (Notion)</b>\n\n` +
+            `📌 <b>${e(result.title)}</b>\n` +
+            `📆 Prazo: ${e(deadlineStr)}\n` +
+            (warnings.length ? `\n${warnings.join("\n")}\n` : "") +
+            `\nCriar na sua tabela de tarefas?`,
+          { reply_markup: createProposalKeyboard(id, "task") }
+        );
+        return;
+      }
+
       case "update": {
-        // O id vem do modelo, mas o evento é sempre conferido na agenda real.
         const target = events.find((ev) => ev.id === result.eventId);
         if (!target) {
-          await replyHtml(ctx, `${heard}🤔 Não achei esse compromisso na sua agenda. Qual deles você quer alterar?`);
+          await replyHtml(ctx, `${heard}🤔 Não achei esse item na sua agenda. Qual deles você quer alterar?`);
           return;
         }
         if (!target.writable) {
@@ -239,11 +302,11 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
           return;
         }
         let { start, end } = result;
-        if (target.allDay && (start || end)) {
-          await replyHtml(ctx, `${heard}📆 <b>${e(target.title)}</b> é de dia inteiro; ajuste a data direto no calendário.`);
+        if (target.source === "google" && target.allDay && (start || end)) {
+          await replyHtml(ctx, `${heard}📆 <b>${e(target.title)}</b> é de dia inteiro no Google; ajuste a data direto no calendário.`);
           return;
         }
-        if (start && !end) {
+        if (start && !end && start.includes("T") && !target.allDay) {
           const duration = Date.parse(target.end) - Date.parse(target.start);
           end = toLocalIso(new Date(Date.parse(start) + duration));
         }
@@ -254,6 +317,7 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
 
         const action: PendingAction = {
           kind: "update",
+          source: target.source,
           eventId: target.id,
           calendarId: target.calendarId,
           currentTitle: target.title,
@@ -262,20 +326,21 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
           end: end ?? undefined,
         };
         const id = await savePending(action);
+        const newTimeLabel = start ? formatDeadline(start, end) : undefined;
         await saveContext(
           chatId,
           `Alterar "${target.title}" (${describeEventTime(target)})` +
-            (start && end ? ` para ${formatRangeBr(start, end)}` : "") +
+            (newTimeLabel ? ` para ${newTimeLabel}` : "") +
             (result.title ? ` e renomear para "${result.title}"` : "") +
             " (aguardando confirmação)"
         );
 
         await replyHtml(
           ctx,
-          `${heard}✏️ <b>Proposta de alteração</b>\n\n` +
+          `${heard}✏️ <b>Proposta de alteração (${target.source === "notion" ? "Notion" : "Google"})</b>\n\n` +
             `📌 <b>${e(target.title)}</b>\n` +
             `Agora: ${e(describeEventTime(target))}\n` +
-            (start && end ? `Novo: ${e(formatRangeBr(start, end))}\n` : "") +
+            (newTimeLabel ? `Novo: ${e(newTimeLabel)}\n` : "") +
             (result.title ? `Novo título: <b>${e(result.title)}</b>\n` : "") +
             `\nAplicar?`,
           { reply_markup: createProposalKeyboard(id, "update") }
@@ -286,7 +351,7 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
       case "delete": {
         const target = events.find((ev) => ev.id === result.eventId);
         if (!target) {
-          await replyHtml(ctx, `${heard}🤔 Não achei esse compromisso na sua agenda. Qual deles você quer excluir?`);
+          await replyHtml(ctx, `${heard}🤔 Não achei esse item na sua agenda. Qual deles você quer excluir?`);
           return;
         }
         if (!target.writable) {
@@ -295,13 +360,14 @@ async function handleInput(ctx: Context, input: Input): Promise<void> {
         }
         const id = await savePending({
           kind: "delete",
+          source: target.source,
           eventId: target.id,
           calendarId: target.calendarId,
           title: target.title,
         });
         await replyHtml(
           ctx,
-          `${heard}🗑️ <b>Excluir este compromisso?</b>\n\n` +
+          `${heard}🗑️ <b>Excluir ${target.source === "notion" ? "esta tarefa do Notion" : "este compromisso"}?</b>\n\n` +
             `📌 <b>${e(target.title)}</b>\n⏰ ${e(describeEventTime(target))}`,
           { reply_markup: createProposalKeyboard(id, "delete") }
         );
@@ -345,25 +411,51 @@ async function execute(action: PendingAction): Promise<string> {
         description: action.rationale ? `Agendado pelo secretário:\n${action.rationale}` : undefined,
       });
       return (
-        `✅ <b>Agendado!</b>\n\n📌 <b>${e(action.title)}</b>\n⏰ ${e(formatRangeBr(action.start, action.end))}` +
+        `✅ <b>Agendado no Google Calendar!</b>\n\n📌 <b>${e(action.title)}</b>\n⏰ ${e(formatRangeBr(action.start, action.end))}` +
         (created.htmlLink ? `\n🔗 <a href="${e(created.htmlLink)}">Abrir no Google Calendar</a>` : "")
       );
     }
-    case "update": {
-      await updateEvent({
-        calendarId: action.calendarId,
-        eventId: action.eventId,
+    case "task": {
+      const created = await createTask({
         title: action.title,
-        startIso: action.start,
-        endIso: action.end,
+        start: action.start,
+        end: action.end,
       });
       return (
-        `✅ <b>Compromisso atualizado!</b>\n\n📌 <b>${e(action.title ?? action.currentTitle)}</b>` +
-        (action.start && action.end ? `\n⏰ ${e(formatRangeBr(action.start, action.end))}` : "")
+        `✅ <b>Tarefa criada no Notion!</b>\n\n` +
+        `📌 <b>${e(action.title)}</b>\n` +
+        `📆 Prazo: ${e(formatDeadline(action.start, action.end))}` +
+        (created.url ? `\n🔗 <a href="${e(created.url)}">Abrir no Notion</a>` : "")
+      );
+    }
+    case "update": {
+      if (action.source === "notion") {
+        await updateTask({
+          pageId: action.eventId,
+          title: action.title,
+          start: action.start,
+          end: action.end,
+        });
+      } else {
+        await updateEvent({
+          calendarId: action.calendarId,
+          eventId: action.eventId,
+          title: action.title,
+          startIso: action.start,
+          endIso: action.end,
+        });
+      }
+      return (
+        `✅ <b>Atualizado!</b>\n\n📌 <b>${e(action.title ?? action.currentTitle)}</b>` +
+        (action.start ? `\n⏰ ${e(formatDeadline(action.start, action.end))}` : "")
       );
     }
     case "delete": {
-      await deleteEvent(action.calendarId, action.eventId);
+      if (action.source === "notion") {
+        await archiveTask(action.eventId);
+      } else {
+        await deleteEvent(action.calendarId, action.eventId);
+      }
       return `🗑️ <b>Excluído:</b> ${e(action.title)}`;
     }
   }
@@ -392,7 +484,7 @@ bot.callbackQuery(/^a:(ok|no|redo):([a-f0-9]+)$/, async (ctx) => {
   if (verb === "redo") {
     await ctx.answerCallbackQuery();
     await editHtml(ctx, "🔄 Proposta descartada. Me diga quando prefere (ex: <i>\"sexta de manhã\"</i> ou <i>\"amanhã depois das 15h\"</i>).");
-    return; // o contexto da proposta continua guardado para a próxima mensagem
+    return;
   }
 
   await ctx.answerCallbackQuery({ text: "Executando..." });
@@ -402,7 +494,7 @@ bot.callbackQuery(/^a:(ok|no|redo):([a-f0-9]+)$/, async (ctx) => {
     await editHtml(ctx, message);
   } catch (err) {
     console.error("Erro ao executar ação:", err);
-    await savePending(action, id); // permite tentar de novo pelo mesmo botão
+    await savePending(action, id);
     await replyHtml(ctx, errorHtml("Não consegui concluir. Toque no botão para tentar de novo.", err), {
       reply_markup: createProposalKeyboard(id, action.kind),
     });

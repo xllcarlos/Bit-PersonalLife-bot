@@ -4,6 +4,8 @@ import { toLocalIso } from "../time";
 
 export interface CalendarEvent {
   id: string;
+  /** "google": evento do Google Calendar. "notion": tarefa da tabela do Notion. */
+  source: "google" | "notion";
   calendarId: string;
   calendarName: string;
   title: string;
@@ -13,6 +15,8 @@ export interface CalendarEvent {
   end: string;
   allDay: boolean;
   writable: boolean;
+  /** Só para tarefas do Notion: já concluída. */
+  done?: boolean;
 }
 
 let cachedClient: calendar_v3.Calendar | null = null;
@@ -52,6 +56,7 @@ function mapEvent(
     if (!item.start?.date || !item.end?.date) return null;
     return {
       id: item.id,
+      source: "google",
       calendarId,
       calendarName,
       title: item.summary || "(sem título)",
@@ -65,6 +70,7 @@ function mapEvent(
   if (!item.start?.dateTime || !item.end?.dateTime) return null;
   return {
     id: item.id,
+    source: "google",
     calendarId,
     calendarName,
     title: item.summary || "(sem título)",

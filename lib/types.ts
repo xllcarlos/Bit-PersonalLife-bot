@@ -8,7 +8,15 @@ export type PendingAction =
       rationale: string;
     }
   | {
+      /** Tarefa na tabela do Notion. `start` pode ser só data ("YYYY-MM-DD") ou data e hora. */
+      kind: "task";
+      title: string;
+      start: string;
+      end?: string;
+    }
+  | {
       kind: "update";
+      source: "google" | "notion";
       eventId: string;
       calendarId: string;
       currentTitle: string;
@@ -18,6 +26,7 @@ export type PendingAction =
     }
   | {
       kind: "delete";
+      source: "google" | "notion";
       eventId: string;
       calendarId: string;
       title: string;

@@ -23,6 +23,14 @@ export const assistantSchema = z.discriminatedUnion("intent", [
     transcribedText,
   }),
   z.object({
+    intent: z.literal("task"),
+    title: z.string().min(1),
+    // Só data ("2026-10-23") para prazo sem hora, ou data e hora ("2026-10-23T14:00:00-03:00").
+    start: isoDate,
+    end: isoDate.nullish(),
+    transcribedText,
+  }),
+  z.object({
     intent: z.literal("update"),
     eventId: z.string().min(1),
     title: z.string().nullish(),
@@ -52,6 +60,9 @@ export function parseAssistantResponse(raw: string): AssistantResponse {
 
   if (parsed.intent === "schedule" && Date.parse(parsed.end) <= Date.parse(parsed.start)) {
     throw new Error("Horário final anterior ao inicial na resposta do modelo.");
+  }
+  if (parsed.intent === "task" && parsed.end && Date.parse(parsed.end) < Date.parse(parsed.start)) {
+    throw new Error("Prazo final anterior ao inicial na resposta do modelo.");
   }
   if (
     parsed.intent === "update" &&

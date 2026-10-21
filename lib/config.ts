@@ -25,6 +25,16 @@ export const config = {
     clientEmail: process.env.GOOGLE_CLIENT_EMAIL || "",
     privateKey: (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
   },
+  notion: {
+    apiKey: process.env.NOTION_API_KEY || "",
+    databaseId: process.env.NOTION_TASK_DATABASE_ID || "",
+    // Nomes EXATOS das colunas da tabela de tarefas.
+    titleProperty: process.env.NOTION_TITLE_PROPERTY || "Nome da tarefa",
+    dateProperty: process.env.NOTION_DATE_PROPERTY || "Prazo",
+    // Usado só para reconhecer tarefas já concluídas (elas não bloqueiam horário).
+    statusProperty: process.env.NOTION_STATUS_PROPERTY || "Status",
+    doneStatus: process.env.NOTION_DONE_STATUS || "Concluído",
+  },
   redis: {
     // Integração Upstash da Vercel injeta KV_REST_API_*; o painel do Upstash usa UPSTASH_REDIS_REST_*.
     url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || "",

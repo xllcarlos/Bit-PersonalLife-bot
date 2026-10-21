@@ -13,6 +13,7 @@ function buildPrompt(params: {
   now: Date;
   events: CalendarEvent[];
   pendingContext?: string | null;
+  notionEnabled: boolean;
 }): string {
   const today = localDate(params.now);
   const tomorrow = localDate(new Date(Date.parse(addDaysIso(`${today}T12:00:00${config.scheduler.utcOffset}`, 1))));
@@ -21,10 +22,12 @@ function buildPrompt(params: {
   const events = params.events.map((e) => ({
     id: e.id,
     agenda: e.calendarName,
+    fonte: e.source === "notion" ? "tarefa do Notion" : "Google Calendar",
     titulo: e.title.slice(0, 120),
     inicio: e.start,
     fim: e.end,
     diaInteiro: e.allDay,
+    concluida: e.done ?? false,
     editavel: e.writable,
   }));
 
@@ -50,20 +53,28 @@ INTENÇÕES (responda com JSON puro, escolhendo UMA):
    - Se não houver eventos no período perguntado, diga isso claramente.
    - Aponte as melhores janelas livres quando fizer sentido.
 
-2) Criar compromisso/tarefa ("marca", "agenda", "preciso fazer X")
+2) Criar compromisso com hora marcada${params.notionEnabled ? " (reuniões, consultas, aulas, eventos com outras pessoas)" : ' ("marca", "agenda", "preciso fazer X")'}
 {"intent":"schedule","title":"...","start":"YYYY-MM-DDTHH:mm:ss${config.scheduler.utcOffset}","end":"YYYY-MM-DDTHH:mm:ss${config.scheduler.utcOffset}","rationale":"por que esse horário"}
-   - Nunca sobreponha eventos existentes; deixe 15 a 30 min de respiro.
+   - Nunca sobreponha eventos existentes (tarefas com concluida=true não bloqueiam); deixe 15 a 30 min de respiro.
    - Nunca no passado, nem entre 23:00 e 06:30, salvo pedido explícito.
    - Sem data definida: use a próxima janela equilibrada entre 08:00 e 20:30.
    - Sem duração informada: assuma 60 min.
-
-3) Alterar evento existente ("muda a reunião pra 15h", "renomeia X")
+${params.notionEnabled ? `
+2b) Criar TAREFA no Notion (afazeres flexíveis: ler artigo, estudar, preparar aula, entregas, pendências pessoais)
+{"intent":"task","title":"...","start":"...","end":"... (opcional)"}
+   - A tarefa tem só nome e prazo. Não invente tags nem outros campos.
+   - Se o Carlos deu só um dia/prazo ("até quinta", "dia 25"), use APENAS a data: "start":"YYYY-MM-DD" e omita "end".
+   - Se ele pediu um horário ou um bloco ("quinta às 14h", "reservar 1h30 amanhã de manhã"), use data e hora completas, no mesmo formato do item 2, e escolha uma janela livre como no item 2.
+   - Regra de escolha: hora marcada com outras pessoas = item 2 (Google). O que ele faz sozinho = tarefa (Notion). Na dúvida entre os dois, pergunte com "chat".
+` : ""}
+3) Alterar evento ou tarefa existente ("muda a reunião pra 15h", "adia a tarefa X pra sexta", "renomeia X")
 {"intent":"update","eventId":"<id da lista>","title":"novo título (opcional)","start":"... (opcional)","end":"... (opcional)"}
    - Só ids que existem na lista e com editavel=true. Inclua apenas o que muda.
+   - Para tarefa do Notion de dia inteiro, use datas "YYYY-MM-DD".
 
-4) Excluir evento ("desmarca X", "cancela a reunião de sexta")
+4) Excluir evento ou tarefa ("desmarca X", "cancela a reunião de sexta", "apaga a tarefa X")
 {"intent":"delete","eventId":"<id da lista>"}
-   - Só se houver UM evento claramente correspondente.
+   - Só se houver UM item claramente correspondente.
 
 5) Qualquer outra coisa, ou quando algo estiver ambíguo (vários eventos parecidos, falta informação):
 {"intent":"chat","message":"..."}
@@ -81,11 +92,12 @@ export async function processSecretaryInput(params: {
   now: Date;
   events: CalendarEvent[];
   pendingContext?: string | null;
+  notionEnabled?: boolean;
 }): Promise<AssistantResponse> {
   const genAI = getGeminiClient();
 
   const contents: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
-    { text: buildPrompt(params) },
+    { text: buildPrompt({ ...params, notionEnabled: params.notionEnabled ?? false }) },
   ];
 
   if (params.audioBase64) {

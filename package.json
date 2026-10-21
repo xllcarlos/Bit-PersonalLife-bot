@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.0",
+    "@notionhq/client": "^2.2.15",
     "@upstash/redis": "^1.39.0",
     "googleapis": "^144.0.0",
     "grammy": "^1.35.0",
