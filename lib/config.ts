@@ -18,8 +18,12 @@ export const config = {
     fallbackModels: splitList(process.env.GEMINI_FALLBACK_MODELS),
   },
   google: {
-    // Agenda principal (leitura + escrita)
-    calendarId: process.env.GOOGLE_CALENDAR_ID || "primary",
+    // Com Service Account, "primary" aponta para a agenda vazia do próprio robô!
+    // Por isso usamos o e-mail real da agenda compartilhada.
+    calendarId:
+      process.env.GOOGLE_CALENDAR_ID && process.env.GOOGLE_CALENDAR_ID !== "primary"
+        ? process.env.GOOGLE_CALENDAR_ID.trim()
+        : "carlossantana.casds@gmail.com",
     // Agendas extras, somente leitura (ex: Família, Feriados). Separadas por vírgula.
     extraCalendarIds: splitList(process.env.GOOGLE_EXTRA_CALENDAR_IDS),
     clientEmail: process.env.GOOGLE_CLIENT_EMAIL || "",

@@ -5,11 +5,13 @@ import {
   CalendarEvent,
   createEvent,
   deleteEvent,
+  diagnoseGoogle,
   updateEvent,
 } from "../google/calendar";
 import {
   archiveTask,
   createTask,
+  diagnoseNotion,
   isNotionConfigured,
   updateTask,
 } from "../notion/tasks";
@@ -151,6 +153,27 @@ bot.command("start", async (ctx) => {
 
 bot.command("agenda", async (ctx) => {
   await handleInput(ctx, { text: "Como está a minha agenda hoje e nos próximos dias?" });
+});
+
+bot.command("debug", async (ctx) => {
+  await ctx.replyWithChatAction("typing");
+  const now = new Date();
+  const timeMin = startOfDayIso(now);
+  const timeMax = addDaysIso(timeMin, config.scheduler.lookaheadDays);
+
+  const [googleReport, notionReport] = await Promise.all([
+    diagnoseGoogle(timeMin, timeMax),
+    diagnoseNotion(),
+  ]);
+
+  const text =
+    `🔍 <b>Diagnóstico de Conexões</b>\n\n` +
+    `<b>📅 Google Calendar:</b>\n` +
+    googleReport.map(e).join("\n") +
+    `\n\n<b>📝 Notion:</b>\n` +
+    notionReport.map(e).join("\n");
+
+  await replyHtml(ctx, text);
 });
 
 // ───────────── Núcleo: interpretar a mensagem e responder ─────────────

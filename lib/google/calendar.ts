@@ -175,3 +175,41 @@ export async function deleteEvent(calendarId: string, eventId: string): Promise<
   const calendar = getCalendarClient();
   await calendar.events.delete({ calendarId, eventId });
 }
+
+/** Diagnóstico detalhado do Google Calendar para o comando /debug. */
+export async function diagnoseGoogle(timeMinIso: string, timeMaxIso: string): Promise<string[]> {
+  const lines: string[] = [];
+  lines.push(`• GOOGLE_CALENDAR_ID em uso: ${config.google.calendarId}`);
+  lines.push(`• Service Account: ${config.google.clientEmail || "(vazio)"}`);
+
+  try {
+    const calendar = getCalendarClient();
+    const res = await calendar.events.list({
+      calendarId: config.google.calendarId,
+      timeMin: timeMinIso,
+      timeMax: timeMaxIso,
+      singleEvents: true,
+      orderBy: "startTime",
+      maxResults: 20,
+    });
+    const count = res.data.items?.length ?? 0;
+    lines.push(
+      `🟢 Agenda "${res.data.summary || config.google.calendarId}" acessada com sucesso! Eventos nos próximos 14 dias: ${count}`
+    );
+    for (const item of (res.data.items ?? []).slice(0, 5)) {
+      const when = item.start?.dateTime || item.start?.date || "?";
+      lines.push(`  - ${when}: ${item.summary || "(sem título)"}`);
+    }
+  } catch (err) {
+    lines.push(
+      `🔴 Erro ao acessar Google Calendar (${config.google.calendarId}): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    lines.push(
+      `👉 Verifique se você compartilhou a agenda "${config.google.calendarId}" no Google Agenda Web com o e-mail da Service Account (${config.google.clientEmail}).`
+    );
+  }
+
+  return lines;
+}
