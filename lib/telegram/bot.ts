@@ -1,17 +1,25 @@
 import { Bot } from "grammy";
 import { config } from "../config";
 import {
-  analyzeAndScheduleInput,
-  ScheduledProposal,
+  processSecretaryInput,
+  AssistantResponse,
 } from "../gemini/scheduler";
 import {
   createGoogleCalendarEvent,
   getUpcomingGoogleEvents,
+  deleteGoogleCalendarEvent,
   BusySlot,
 } from "../google/calendar";
 import { createProposalKeyboard } from "./keyboards";
 
-export const bot = new Bot(config.telegram.botToken || "dummy_token_for_build");
+// CRÍTICO PARA SERVERLESS NA VERCEL:
+// Desativa webhookReply para que todas as chamadas à API do Telegram sejam concluídas
+// antes de finalizar a função serverless, eliminando o congelamento da resposta.
+export const bot = new Bot(config.telegram.botToken || "dummy_token_for_build", {
+  client: {
+    canUseWebhookReply: () => false,
+  },
+});
 
 function isAuthorized(userId?: number): boolean {
   if (!config.telegram.allowedUserId) {
@@ -42,44 +50,36 @@ bot.command("start", async (ctx) => {
     return ctx.reply("⛔ Acesso não autorizado a este bot.");
   }
 
-  const geminiStatus = config.gemini.apiKey ? "🟢 Conectado" : "🔴 Não configurado";
-  const googleStatus = config.google.clientEmail ? "🟢 Conectado" : "🟡 Pendente credenciais";
-
   await ctx.reply(
-    `👋 Olá, Carlos! Sou o seu **Assistente Racional de Rotina**.\n\n` +
-      `Eu leio os compromissos reais da sua agenda (sem assumir horários fixos inventados) e encontro a melhor janela para suas novas tarefas e estudos.\n\n` +
-      `📊 **Status:**\n` +
-      `• Gemini AI: ${geminiStatus}\n` +
-      `• Google Calendar: ${googleStatus}\n` +
-      `• Janela de Leitura: Próximos ${config.scheduler.lookaheadDays} dias\n\n` +
-      `🎙️ **Como usar:**\n` +
-      `Mande um **áudio** ou **mensagem de texto** com o que precisa fazer. Exemplos:\n` +
-      `_\"Preciso ler o artigo do MICCAI na próxima quinta à tarde, dura 1h30\"_\n` +
-      `_\"Tenho que preparar a mentoria dos alunos para a semana que vem\"_\n\n` +
-      `Eu calculo o melhor horário sem sobrepor seus compromissos e peço sua confirmação!`,
+    `👋 Olá, Carlos! Sou o seu **Secretário de Agenda Pessoal**.\n\n` +
+      `Estou conectado à sua agenda do Google e acompanho sua rotina em tempo real.\n\n` +
+      `🎙️ **O que você pode me pedir por áudio ou texto:**\n` +
+      `• *\"Como está a minha agenda hoje?\"*\n` +
+      `• *\"O que eu tenho para fazer amanhã?\"*\n` +
+      `• *\"Preciso ler o artigo do MICCAI na quinta à tarde, dura 1h30\"*\n` +
+      `• *\"Desmarca a reunião de amanhã às 14h\"*\n\n` +
+      `Estou pronto! O que gostaria de ver ou agendar?`,
     { parse_mode: "Markdown" }
   );
 });
 
-// /status
-bot.command("status", async (ctx) => {
+// /agenda
+bot.command("agenda", async (ctx) => {
   if (!isAuthorized(ctx.from?.id)) return;
-  await ctx.reply(
-    `⚙️ **Configurações Atuais:**\n` +
-      `• Seu Telegram ID: \`${ctx.from?.id}\`\n` +
-      `• Google Calendar ID: \`${config.google.calendarId}\`\n` +
-      `• Janela de visualização: ${config.scheduler.lookaheadDays} dias`,
-    { parse_mode: "Markdown" }
-  );
+  await handleUserSecretaryInput(ctx, { text: "Como está a minha agenda hoje e nos próximos dias?" });
 });
 
 // Process user input (voice or text)
-async function handleUserTaskInput(ctx: any, input: { text?: string; voiceFileId?: string }) {
+async function handleUserSecretaryInput(
+  ctx: any,
+  input: { text?: string; voiceFileId?: string }
+) {
   if (!isAuthorized(ctx.from?.id)) {
     return ctx.reply("⛔ Acesso não autorizado.");
   }
 
-  const statusMsg = await ctx.reply("🧠 Consultando seus compromissos reais e analisando janelas livres...");
+  // Mostra "digitando..." ou "gravando..." nativo no Telegram
+  await ctx.replyWithChatAction(input.voiceFileId ? "record_voice" : "typing");
 
   try {
     let audioBase64: string | undefined;
@@ -94,7 +94,7 @@ async function handleUserTaskInput(ctx: any, input: { text?: string; voiceFileId
       }
     }
 
-    // Dynamic horizon: today until lookaheadDays (e.g. 14 days)
+    // Busca compromissos reais dos próximos 14 a 21 dias
     const now = new Date();
     const futureLimit = new Date();
     futureLimit.setDate(futureLimit.getDate() + config.scheduler.lookaheadDays);
@@ -104,8 +104,8 @@ async function handleUserTaskInput(ctx: any, input: { text?: string; voiceFileId
       futureLimit.toISOString()
     );
 
-    // Analyze with Gemini
-    const proposal = await analyzeAndScheduleInput({
+    // Consulta o secretário Gemini
+    const result: AssistantResponse = await processSecretaryInput({
       text: input.text,
       audioBase64,
       audioMimeType: "audio/ogg",
@@ -113,67 +113,102 @@ async function handleUserTaskInput(ctx: any, input: { text?: string; voiceFileId
       busySlots,
     });
 
-    const formattedDate = formatDateBr(proposal.suggestedStart);
+    const audioTranscription = result.transcribedText
+      ? `🎙️ _\"${result.transcribedText}\"_\n\n`
+      : "";
 
-    // Minimal payload for stateless confirmation
-    const payload = {
-      t: proposal.title,
-      s: proposal.suggestedStart,
-      e: proposal.suggestedEnd,
-      m: proposal.durationMinutes,
-      r: proposal.rationale,
-    };
-    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64");
+    // 1. CONSULTA DE AGENDA
+    if (result.intent === "query") {
+      await ctx.reply(`${audioTranscription}${result.message}`, {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
 
-    const messageText =
-      `🧠 **Proposta Racional de Encaixe:**\n\n` +
-      `📌 **Item:** ${proposal.title}\n` +
-      `⏰ **Horário Sugerido:** ${formattedDate} (${proposal.durationMinutes} min)\n` +
-      `💡 **Racional do Gemini:**\n_${proposal.rationale}_\n\n` +
-      (proposal.transcribedText ? `🎙️ _Transcrição: "${proposal.transcribedText}"_\n\n` : "") +
-      `Ficou bom para você? Toque abaixo para confirmar na sua agenda ou sugerir outro horário.\n\n` +
-      `📦 Ref: ${encodedPayload}`;
+    // 2. NOVO AGENDAMENTO
+    if (result.intent === "schedule") {
+      const formattedDate = formatDateBr(result.suggestedStart);
 
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      statusMsg.message_id,
-      messageText,
-      {
+      // Metadados guardados em um link transparente com espaço de largura zero (invisível ao usuário)
+      const payload = {
+        t: result.title,
+        s: result.suggestedStart,
+        e: result.suggestedEnd,
+        m: result.durationMinutes,
+        r: result.rationale,
+      };
+      const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64");
+      const invisibleDataLink = `[​](tg://payload/${encodedPayload})`;
+
+      const messageText =
+        `${audioTranscription}📅 **Proposta de Agendamento:**\n\n` +
+        `📌 **Item:** ${result.title}\n` +
+        `⏰ **Horário Sugerido:** ${formattedDate} (${result.durationMinutes} min)\n\n` +
+        `💡 **Justificativa:**\n_${result.rationale}_\n\n` +
+        `Ficou bom para você? Toque abaixo para confirmar na sua agenda.${invisibleDataLink}`;
+
+      await ctx.reply(messageText, {
         parse_mode: "Markdown",
         reply_markup: createProposalKeyboard(),
+      });
+      return;
+    }
+
+    // 3. EXCLUSÃO DE COMPROMISSO
+    if (result.intent === "delete") {
+      if (result.matchingEventId) {
+        await deleteGoogleCalendarEvent(result.matchingEventId);
+        await ctx.reply(
+          `${audioTranscription}🗑️ **Compromisso removido com sucesso!**\n\n` +
+            `Removi **${result.targetTitle}** da sua agenda.`,
+          { parse_mode: "Markdown" }
+        );
+      } else {
+        await ctx.reply(
+          `${audioTranscription}⚠️ Não encontrei nenhum compromisso com o nome **"${result.targetTitle}"** na sua agenda para remover. Verifique se o nome está correto.`,
+          { parse_mode: "Markdown" }
+        );
       }
-    );
+      return;
+    }
+
+    // 4. CONVERSA GERAL
+    if (result.intent === "chat") {
+      await ctx.reply(`${audioTranscription}${result.message}`, {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
   } catch (error: any) {
     console.error("Erro ao processar mensagem do usuário:", error);
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      statusMsg.message_id,
-      `⚠️ Desculpe, tive um problema ao analisar:\n\`${error?.message || error}\`\n\nTente novamente ou verifique as credenciais.`
+    await ctx.reply(
+      `⚠️ Desculpe, tive um problema ao analisar:\n\`${error?.message || error}\`\n\nTente novamente.`
     );
   }
 }
 
 bot.on("message:voice", async (ctx) => {
-  await handleUserTaskInput(ctx, { voiceFileId: ctx.message.voice.file_id });
+  await handleUserSecretaryInput(ctx, { voiceFileId: ctx.message.voice.file_id });
 });
 
 bot.on("message:audio", async (ctx) => {
-  await handleUserTaskInput(ctx, { voiceFileId: ctx.message.audio.file_id });
+  await handleUserSecretaryInput(ctx, { voiceFileId: ctx.message.audio.file_id });
 });
 
 bot.on("message:text", async (ctx) => {
   if (ctx.message.text.startsWith("/")) return;
-  await handleUserTaskInput(ctx, { text: ctx.message.text });
+  await handleUserSecretaryInput(ctx, { text: ctx.message.text });
 });
 
+// Callbacks dos botões
 bot.on("callback_query:data", async (ctx) => {
   const data = ctx.callbackQuery.data;
-  const messageText = ctx.callbackQuery.message?.text || "";
+  const rawText = ctx.callbackQuery.message?.text || "";
 
   if (data === "action:cancel") {
     await ctx.answerCallbackQuery({ text: "Cancelado." });
     await ctx.editMessageText(
-      messageText.replace(/Ficou bom para você\?[\s\S]*$/, "❌ **Agendamento cancelado.**"),
+      rawText.replace(/Ficou bom para você\?[\s\S]*$/, "❌ **Agendamento cancelado.**"),
       { parse_mode: "Markdown" }
     );
     return;
@@ -182,44 +217,60 @@ bot.on("callback_query:data", async (ctx) => {
   if (data === "action:reschedule") {
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      "🔄 Sem problemas! Mande um áudio ou texto dizendo a sua preferência de dia/horário (ex: _'joga para a próxima sexta de manhã'_ ou _'prefiro quarta depois das 16h'_)."
+      "🔄 Sem problemas! Mande um áudio ou texto dizendo quando você prefere (ex: _'joga para sexta de manhã'_ ou _'prefiro amanhã às 15h'_)."
     );
     return;
   }
 
   if (data === "action:confirm") {
-    await ctx.answerCallbackQuery({ text: "Criando evento..." });
+    await ctx.answerCallbackQuery({ text: "Agendando..." });
 
-    const match = messageText.match(/📦 Ref: ([A-Za-z0-9+/=]+)/);
-    if (!match) {
-      await ctx.reply("⚠️ Dados da proposta não encontrados. Envie a mensagem novamente.");
+    // Busca o payload codificado no link invisível tg://payload/...
+    // Também suporta fallback do formato anterior caso haja mensagem antiga
+    const match =
+      rawText.match(/tg:\/\/payload\/([A-Za-z0-9+/=]+)/) ||
+      rawText.match(/📦 Ref: ([A-Za-z0-9+/=]+)/);
+
+    // Se não encontrou no texto cru, verifica as entities do Telegram
+    let encodedData = match ? match[1] : null;
+    if (!encodedData && ctx.callbackQuery.message?.entities) {
+      for (const ent of ctx.callbackQuery.message.entities) {
+        if (ent.type === "text_link" && ent.url?.startsWith("tg://payload/")) {
+          encodedData = ent.url.replace("tg://payload/", "");
+          break;
+        }
+      }
+    }
+
+    if (!encodedData) {
+      await ctx.reply("⚠️ Não consegui recuperar os dados do agendamento. Envie a mensagem novamente.");
       return;
     }
 
     try {
-      const json = Buffer.from(match[1], "base64").toString("utf-8");
+      const json = Buffer.from(encodedData, "base64").toString("utf-8");
       const payload = JSON.parse(json);
 
       const result = await createGoogleCalendarEvent({
         title: payload.t,
         startIso: payload.s,
         endIso: payload.e || payload.s,
-        description: `💡 Planejado pelo Assistente Racional:\n${payload.r}`,
+        description: `💡 Agendado pelo Secretário Executivo:\n${payload.r}`,
       });
 
       const confirmationDetails =
-        `✅ **Sucesso! Criado no Google Agenda.**\n\n` +
-        `📌 **Item:** ${payload.t}\n` +
+        `✅ **Confirmado e agendado com sucesso!**\n\n` +
+        `📌 **Compromisso:** ${payload.t}\n` +
         `⏰ **Horário:** ${formatDateBr(payload.s)}\n` +
-        (result.htmlLink ? `🔗 [Abrir no Google Calendar](${result.htmlLink})\n\n` : "\n\n") +
-        `🗓️ Já sincronizado no seu **Notion Calendar**, pronto para você visualizar ou arrastar se necessário!`;
+        (result.htmlLink ? `🔗 [Ver no Google Calendar](${result.htmlLink})\n\n` : "\n\n") +
+        `🗓️ Já está sincronizado e visível no seu **Notion Calendar**!`;
 
       await ctx.editMessageText(confirmationDetails, {
         parse_mode: "Markdown",
       });
     } catch (err: any) {
       console.error("Erro ao salvar agendamento:", err);
-      await ctx.reply(`⚠️ Erro ao salvar agendamento:\n\`${err?.message || err}\``);
+      await ctx.reply(`⚠️ Erro ao salvar na agenda:\n\`${err?.message || err}\``);
     }
   }
 });

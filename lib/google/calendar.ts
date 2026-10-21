@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import { config } from "../config";
 
 export interface BusySlot {
+  id?: string;
   title: string;
   start: string;
   end: string;
@@ -57,6 +58,20 @@ export async function createGoogleCalendarEvent(params: {
   };
 }
 
+export async function deleteGoogleCalendarEvent(eventId: string): Promise<boolean> {
+  const calendar = getCalendarClient();
+  if (!calendar) {
+    throw new Error("Google Calendar não configurado.");
+  }
+
+  await calendar.events.delete({
+    calendarId: config.google.calendarId,
+    eventId,
+  });
+
+  return true;
+}
+
 export async function getUpcomingGoogleEvents(
   startDateIso: string,
   endDateIso: string
@@ -84,6 +99,7 @@ export async function getUpcomingGoogleEvents(
       const end = item.end?.dateTime || item.end?.date;
       if (start && end) {
         busySlots.push({
+          id: item.id || undefined,
           title: item.summary || "Ocupado",
           start,
           end,
