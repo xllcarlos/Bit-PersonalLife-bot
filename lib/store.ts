@@ -86,6 +86,14 @@ export function clearContext(chatId: number): Promise<void> {
   return deleteValue(`context:${chatId}`);
 }
 
+export function getCachedNotionDbId(): Promise<string | null> {
+  return getValue<string>("notion:db_id");
+}
+
+export function setCachedNotionDbId(dbId: string): Promise<void> {
+  return setValue("notion:db_id", dbId, 24 * 60 * 60);
+}
+
 /** true se este update do Telegram ainda não foi processado (evita duplicidade em reenvios). */
 export async function markUpdateSeen(updateId: number): Promise<boolean> {
   const key = `update:${updateId}`;

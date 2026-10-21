@@ -12,10 +12,13 @@ export const config = {
   },
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || "",
-    model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
-    // Lista separada por vírgula, vazia por padrão: hoje só o modelo principal está disponível.
-    // Se a Google liberar outro modelo, basta listá-lo aqui, sem alterar código.
-    fallbackModels: splitList(process.env.GEMINI_FALLBACK_MODELS),
+    // Tenta primeiro o Flash-Lite (muito mais rápido para secretaria direta) e faz fallback automático para o 3.8-flash
+    model: process.env.GEMINI_MODEL || "gemini-3.8-flash-lite",
+    fallbackModels: [
+      "gemini-3.8-flash-lite",
+      "gemini-3.8-flash",
+      ...splitList(process.env.GEMINI_FALLBACK_MODELS),
+    ],
   },
   google: {
     // Com Service Account, "primary" aponta para a agenda vazia do próprio robô!

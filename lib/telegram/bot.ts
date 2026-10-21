@@ -1,6 +1,6 @@
 import { Bot, Context } from "grammy";
 import { config, getMissingEnv } from "../config";
-import { processSecretaryInput } from "../gemini/secretary";
+import { processSecretaryInput, diagnoseGeminiModels } from "../gemini/secretary";
 import {
   CalendarEvent,
   createEvent,
@@ -161,14 +161,17 @@ bot.command("debug", async (ctx) => {
   const timeMin = startOfDayIso(now);
   const timeMax = addDaysIso(timeMin, config.scheduler.lookaheadDays);
 
-  const [googleReport, notionReport] = await Promise.all([
+  const [googleReport, notionReport, geminiReport] = await Promise.all([
     diagnoseGoogle(timeMin, timeMax),
     diagnoseNotion(),
+    diagnoseGeminiModels(),
   ]);
 
   const text =
     `🔍 <b>Diagnóstico de Conexões</b>\n\n` +
-    `<b>📅 Google Calendar:</b>\n` +
+    `<b>🤖 Gemini:</b>\n` +
+    geminiReport.map(e).join("\n") +
+    `\n\n<b>📅 Google Calendar:</b>\n` +
     googleReport.map(e).join("\n") +
     `\n\n<b>📝 Notion:</b>\n` +
     notionReport.map(e).join("\n");

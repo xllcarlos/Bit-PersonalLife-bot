@@ -1,6 +1,7 @@
 import { Client, isFullPage } from "@notionhq/client";
 import { config } from "../config";
 import { toLocalIso } from "../time";
+import { getCachedNotionDbId, setCachedNotionDbId } from "../store";
 import type { CalendarEvent } from "../google/calendar";
 
 let client: Client | null = null;
@@ -27,6 +28,11 @@ const isDateOnly = (value: string) => !value.includes("T");
  */
 export async function resolveDatabaseId(): Promise<string> {
   if (resolvedDbId) return resolvedDbId;
+  const cached = await getCachedNotionDbId();
+  if (cached) {
+    resolvedDbId = cached;
+    return cached;
+  }
   const notion = getClient();
   const configuredId = config.notion.databaseId.trim();
 
@@ -34,14 +40,15 @@ export async function resolveDatabaseId(): Promise<string> {
     try {
       const db = await notion.databases.retrieve({ database_id: configuredId });
       resolvedDbId = db.id;
+      await setCachedNotionDbId(resolvedDbId);
       return resolvedDbId;
     } catch {
-      // Se não é um database_id válido/acessível, pode ser o ID de uma página que contém a tabela inline
       try {
         const blocks = await notion.blocks.children.list({ block_id: configuredId, page_size: 100 });
         const childDb = blocks.results.find((b: any) => b.type === "child_database");
         if (childDb) {
           resolvedDbId = childDb.id;
+          await setCachedNotionDbId(resolvedDbId);
           return resolvedDbId;
         }
       } catch {
@@ -50,7 +57,6 @@ export async function resolveDatabaseId(): Promise<string> {
     }
   }
 
-  // Último recurso: busca todos os bancos de dados que a integração tem permissão para ver
   const search = await notion.search({
     filter: { property: "object", value: "database" },
     page_size: 20,
@@ -58,6 +64,7 @@ export async function resolveDatabaseId(): Promise<string> {
 
   if (search.results.length > 0) {
     resolvedDbId = search.results[0].id;
+    await setCachedNotionDbId(resolvedDbId);
     return resolvedDbId;
   }
 

@@ -4,10 +4,31 @@ import { describeNow, localDate, addDaysIso } from "../time";
 import type { CalendarEvent } from "../google/calendar";
 import { AssistantResponse, parseAssistantResponse } from "./schema";
 
-// Timeout amplo (48s) para que o gemini-3.8-flash nunca seja abortado no meio da geração
-const ATTEMPT_TIMEOUT_MS = 48_000;
+const ATTEMPT_TIMEOUT_MS = 45_000;
 const MAX_ATTEMPTS = 2;
 const TOTAL_BUDGET_MS = 52_000;
+
+// Guarda em memória modelos que retornaram 404 para não perder tempo tentando-os de novo na mesma instância
+const unavailableModels = new Set<string>();
+
+export async function diagnoseGeminiModels(): Promise<string[]> {
+  if (!config.gemini.apiKey) return ["🔴 GEMINI_API_KEY vazio."];
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${config.gemini.apiKey}`
+    );
+    if (!res.ok) return [`🔴 Erro ao listar modelos: HTTP ${res.status}`];
+    const data = (await res.json()) as { models?: Array<{ name: string }> };
+    const flashModels = (data.models ?? [])
+      .map((m) => m.name.replace(/^models\//, ""))
+      .filter((name) => /flash/i.test(name));
+    return [
+      `• Modelos Flash disponíveis na sua chave: ${flashModels.join(", ") || "(nenhum listado)"}`,
+    ];
+  } catch (err) {
+    return [`🔴 Falha ao consultar modelos: ${err instanceof Error ? err.message : String(err)}`];
+  }
+}
 
 function buildPrompt(params: {
   now: Date;
@@ -20,7 +41,6 @@ function buildPrompt(params: {
     new Date(Date.parse(addDaysIso(`${today}T12:00:00${config.scheduler.utcOffset}`, 1)))
   );
 
-  // Filtra tarefas já concluídas e formata em linhas enxutas para reduzir tokens e acelerar a resposta
   const activeEvents = params.events.filter((e) => !e.done);
   const eventLines =
     activeEvents.length > 0
@@ -101,16 +121,25 @@ export async function processSecretaryInput(params: {
     throw new Error("Nenhum texto ou áudio fornecido para análise.");
   }
 
-  const models = [...new Set([config.gemini.model, ...config.gemini.fallbackModels])];
+  // Prioriza o modelo Flash-Lite primeiro (a menos que já tenha dado 404 antes), depois o modelo configurado e fallbacks
+  const candidateModels = [
+    ...new Set(["gemini-3.8-flash-lite", config.gemini.model, ...config.gemini.fallbackModels]),
+  ].filter((m) => !unavailableModels.has(m));
+
   const startedAt = Date.now();
   let responseText = "";
   let lastError: unknown = null;
 
-  outer: for (const modelName of models) {
+  outer: for (const modelName of candidateModels) {
     const model = genAI.getGenerativeModel(
       {
         model: modelName,
-        generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.1,
+          // Desativa thinking profundo desnecessário em modelos 2.5/3.x para responder em ~2-4s
+          ...({ thinkingConfig: { thinkingBudget: 0 } } as Record<string, unknown>),
+        },
       },
       { timeout: ATTEMPT_TIMEOUT_MS }
     );
@@ -126,9 +155,35 @@ export async function processSecretaryInput(params: {
         lastError = err;
         const message = err instanceof Error ? err.message : String(err);
         console.warn(`Modelo ${modelName}, tentativa ${attempt} falhou: ${message}`);
+
+        if (/404|not found|no longer available/i.test(message)) {
+          unavailableModels.add(modelName);
+          break; // pula imediatamente para o próximo modelo
+        }
+
+        // Se o modelo não aceitar thinkingConfig (400 Invalid Argument), tenta na hora sem thinkingConfig
+        if (/thinkingConfig|thinking_config|400/i.test(message)) {
+          try {
+            const plainModel = genAI.getGenerativeModel(
+              {
+                model: modelName,
+                generationConfig: { responseMimeType: "application/json", temperature: 0.1 },
+              },
+              { timeout: ATTEMPT_TIMEOUT_MS }
+            );
+            const response = await plainModel.generateContent(contents);
+            responseText = response.response.text();
+            lastError = null;
+            break outer;
+          } catch (innerErr) {
+            lastError = innerErr;
+            break;
+          }
+        }
+
         const transient = /503|429|high demand/i.test(message);
         if (attempt < MAX_ATTEMPTS && transient) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          await new Promise((resolve) => setTimeout(resolve, 1200));
         } else {
           break;
         }
