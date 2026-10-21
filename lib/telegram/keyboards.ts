@@ -1,9 +1,16 @@
 import { InlineKeyboard } from "grammy";
 
-export function createProposalKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("✅ Confirmar na Agenda", "action:confirm")
+export function createProposalKeyboard(
+  id: string,
+  kind: "create" | "update" | "delete"
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  if (kind === "delete") {
+    return kb.text("🗑️ Sim, excluir", `a:ok:${id}`).text("❌ Cancelar", `a:no:${id}`);
+  }
+  return kb
+    .text(kind === "create" ? "✅ Confirmar" : "✅ Aplicar", `a:ok:${id}`)
     .row()
-    .text("🔄 Outro Horário", "action:reschedule")
-    .text("❌ Cancelar", "action:cancel");
+    .text("🔄 Outro horário", `a:redo:${id}`)
+    .text("❌ Cancelar", `a:no:${id}`);
 }

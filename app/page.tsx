@@ -1,111 +1,46 @@
 export default function HomePage() {
-  return (
-    <main
-      style={{
-        maxWidth: "860px",
-        margin: "0 auto",
-        padding: "40px 20px",
-        lineHeight: "1.6",
-      }}
-    >
-      <header
-        style={{
-          borderBottom: "1px solid #30363d",
-          paddingBottom: "24px",
-          marginBottom: "32px",
-        }}
-      >
-        <div
-          style={{
-            display: "inline-block",
-            padding: "4px 12px",
-            borderRadius: "20px",
-            backgroundColor: "#23863622",
-            color: "#3fb950",
-            fontSize: "13px",
-            fontWeight: "600",
-            marginBottom: "12px",
-            border: "1px solid #23863655",
-          }}
-        >
-          🟢 Online no Vercel
-        </div>
-        <h1 style={{ fontSize: "32px", margin: "0 0 10px 0", color: "#f0f6fc" }}>
-          Routine AI Bot 🧠
-        </h1>
-        <p style={{ fontSize: "16px", color: "#8b949e", margin: 0 }}>
-          Assistente de Gestão de Agenda Racional e Dinâmica (Telegram + Gemini + Google Calendar + Notion Calendar).
-        </p>
-      </header>
+  const card = {
+    backgroundColor: "#161b22",
+    border: "1px solid #30363d",
+    borderRadius: "8px",
+    padding: "24px",
+    marginBottom: "24px",
+  } as const;
+  const code = {
+    backgroundColor: "#0d1117",
+    padding: "16px",
+    borderRadius: "6px",
+    overflowX: "auto",
+    fontSize: "13px",
+    color: "#79c0ff",
+    border: "1px solid #21262d",
+  } as const;
 
-      <section
-        style={{
-          backgroundColor: "#161b22",
-          border: "1px solid #30363d",
-          borderRadius: "8px",
-          padding: "24px",
-          marginBottom: "32px",
-        }}
-      >
-        <h2 style={{ fontSize: "20px", marginTop: 0, color: "#58a6ff" }}>
-          🚀 Ativação do Webhook do Telegram
-        </h2>
-        <p style={{ color: "#c9d1d9" }}>
-          Após realizar o deploy na Vercel e configurar suas variáveis de ambiente, clique no botão abaixo para registrar o webhook:
+  return (
+    <main style={{ maxWidth: "860px", margin: "0 auto", padding: "40px 20px", lineHeight: 1.6 }}>
+      <h1 style={{ color: "#f0f6fc" }}>Routine AI Bot 🧠</h1>
+      <p style={{ color: "#8b949e" }}>
+        Secretário de agenda no Telegram: Gemini + Google Calendar (visível no Notion Calendar).
+      </p>
+
+      <section style={card}>
+        <h2 style={{ marginTop: 0, color: "#58a6ff" }}>Ativar o webhook</h2>
+        <p>
+          Depois do deploy e de definir as variáveis na Vercel, abra no navegador (a chave é o seu{" "}
+          <code>TELEGRAM_SECRET_TOKEN</code>):
         </p>
-        <a
-          href="/api/setup-webhook"
-          target="_blank"
-          style={{
-            display: "inline-block",
-            backgroundColor: "#238636",
-            color: "#ffffff",
-            padding: "10px 20px",
-            borderRadius: "6px",
-            textDecoration: "none",
-            fontWeight: "600",
-            fontSize: "14px",
-          }}
-        >
-          Conectar Webhook ao Telegram ⚡
-        </a>
+        <pre style={code}>{`/api/setup-webhook?key=SEU_TELEGRAM_SECRET_TOKEN`}</pre>
       </section>
 
-      <section
-        style={{
-          backgroundColor: "#161b22",
-          border: "1px solid #30363d",
-          borderRadius: "8px",
-          padding: "24px",
-        }}
-      >
-        <h2 style={{ fontSize: "20px", marginTop: 0, color: "#58a6ff" }}>
-          📋 Variáveis de Ambiente Necessárias (.env)
-        </h2>
-        <pre
-          style={{
-            backgroundColor: "#0d1117",
-            padding: "16px",
-            borderRadius: "6px",
-            overflowX: "auto",
-            fontSize: "13px",
-            color: "#79c0ff",
-            border: "1px solid #21262d",
-          }}
-        >
-{`# Telegram
-TELEGRAM_BOT_TOKEN="seu_token_do_botfather"
-ALLOWED_TELEGRAM_USER_ID="seu_user_id"
-TELEGRAM_SECRET_TOKEN="um_segredo_aleatorio"
-
-# Gemini (Google AI Studio - 100% Gratuito)
-GEMINI_API_KEY="sua_chave_do_ai_studio"
-
-# Google Calendar (Service Account)
-GOOGLE_CLIENT_EMAIL="seu-bot@seu-projeto.iam.gserviceaccount.com"
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-GOOGLE_CALENDAR_ID="carlossantana.casds@gmail.com"`}
-        </pre>
+      <section style={card}>
+        <h2 style={{ marginTop: 0, color: "#58a6ff" }}>Variáveis de ambiente</h2>
+        <p>
+          A lista completa e comentada está em <code>.env.example</code>. Obrigatórias:{" "}
+          <code>TELEGRAM_BOT_TOKEN</code>, <code>TELEGRAM_SECRET_TOKEN</code>,{" "}
+          <code>ALLOWED_TELEGRAM_USER_ID</code>, <code>GEMINI_API_KEY</code>,{" "}
+          <code>GOOGLE_CLIENT_EMAIL</code>, <code>GOOGLE_PRIVATE_KEY</code>,{" "}
+          <code>GOOGLE_CALENDAR_ID</code> e o Redis do Upstash.
+        </p>
       </section>
     </main>
   );
