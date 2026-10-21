@@ -30,7 +30,7 @@ Todas as variáveis estão em [`.env.example`](.env.example).
 3. `TELEGRAM_SECRET_TOKEN`: um texto aleatório e longo (protege o webhook e o setup).
 
 ### Gemini
-Chave em <https://aistudio.google.com/app/apikey> → `GEMINI_API_KEY`. Modelo em `GEMINI_MODEL`; reservas em `GEMINI_FALLBACK_MODELS`.
+Chave em <https://aistudio.google.com/app/apikey> → `GEMINI_API_KEY`. Modelo em `GEMINI_MODEL` (padrão `gemini-3.8-flash`). `GEMINI_FALLBACK_MODELS` é opcional e vem vazio; sem reserva, o bot tenta até 3 vezes com espera crescente quando a Google responde 503/429.
 
 ### Google Calendar (Service Account)
 1. Google Cloud Console → ative a **Google Calendar API**.

@@ -13,10 +13,9 @@ export const config = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || "",
     model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
-    // Lista separada por vírgula. Confira os nomes disponíveis na sua conta.
-    fallbackModels: process.env.GEMINI_FALLBACK_MODELS
-      ? splitList(process.env.GEMINI_FALLBACK_MODELS)
-      : ["gemini-2.5-flash"],
+    // Lista separada por vírgula, vazia por padrão: hoje só o modelo principal está disponível.
+    // Se a Google liberar outro modelo, basta listá-lo aqui, sem alterar código.
+    fallbackModels: splitList(process.env.GEMINI_FALLBACK_MODELS),
   },
   google: {
     // Agenda principal (leitura + escrita)

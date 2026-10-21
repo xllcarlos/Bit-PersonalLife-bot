@@ -5,6 +5,7 @@ import type { CalendarEvent } from "../google/calendar";
 import { AssistantResponse, parseAssistantResponse } from "./schema";
 
 const ATTEMPT_TIMEOUT_MS = 20_000;
+const MAX_ATTEMPTS = 3;
 // A rota da Vercel tem 60s (maxDuration); paramos de tentar antes disso.
 const TOTAL_BUDGET_MS = 40_000;
 
@@ -114,7 +115,8 @@ export async function processSecretaryInput(params: {
       { timeout: ATTEMPT_TIMEOUT_MS }
     );
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    // Sem modelo reserva, o que protege contra picos (503) é tentar de novo com espera crescente.
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (Date.now() - startedAt > TOTAL_BUDGET_MS) break outer;
       try {
         const response = await model.generateContent(contents);
@@ -126,10 +128,10 @@ export async function processSecretaryInput(params: {
         const message = err instanceof Error ? err.message : String(err);
         console.warn(`Modelo ${modelName}, tentativa ${attempt} falhou: ${message}`);
         const transient = /503|429|high demand|timeout|aborted/i.test(message);
-        if (attempt < 2 && transient) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+        if (attempt < MAX_ATTEMPTS && transient) {
+          await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
         } else {
-          break; // próximo modelo
+          break; // próximo modelo (se houver)
         }
       }
     }
